@@ -1,3 +1,4 @@
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -5,6 +6,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutube/mic_lib.dart';
 import 'package:path_provider/path_provider.dart';
 
 void main() {
@@ -33,37 +35,28 @@ class MyHomePage extends StatefulWidget {
 
 enum HoverState { inside, outside }
 
-class _MyHomePageState extends State<MyHomePage> {
-  var hoverState = HoverState.outside;
+class VtubePlayer extends StatefulWidget {
+  final MicLib micLib;
+  const VtubePlayer({super.key, required this.micLib});
 
+  @override
+  State<VtubePlayer> createState() => _VtubePlayerState();
+}
+
+class _VtubePlayerState extends State<VtubePlayer> {
+  var hoverState = HoverState.outside;
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
       onEnter: onMouseEnter,
       onExit: onMouseExit,
-      child: Scaffold(
-        backgroundColor: Colors.green,
-        appBar: AppBar(
-          backgroundColor: Colors.green,
-          elevation: 0,
-          title: Row(children: [
-            Padding(
-              padding: const EdgeInsets.all(4),
-              child: ElevatedButton(
-                onPressed: import,
-                child: const Text('import'),
-              ),
-            ),
-          ]),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Container(
-              color: Colors.blue,
-              child: Text(hoverState.toString()),
-            ),
-          ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Container(
+          color: Colors.blue,
+          width: double.infinity,
+          height: double.infinity,
+          child: Text(hoverState.toString()),
         ),
       ),
     );
@@ -77,20 +70,117 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() => hoverState = HoverState.outside);
   }
 
+  Future<void> start() async {
+    final dir = await getApplicationSupportDirectory();
+    final results = await Future.wait(
+        fileNames.map((val) => File("${dir.path}/$val").exists()));
+    for (var i = 0; i < results.length; i++) {
+      if (!results[i]) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Missing File ${fileNames[i]}")));
+        }
+      }
+    }
+
+    widget.micLib.startListening(onData);
+  }
+
+  var text = "";
+  void onData(Pointer<Float> ptr, int size) {
+    final list = ptr.asTypedList(size);
+    setState(() {
+      text = list.toString();
+    });
+  }
+}
+
+class _MyHomePageState extends State<MyHomePage> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.green,
+      appBar: AppBar(
+        backgroundColor: Colors.green,
+        elevation: 0,
+        title: Row(children: [
+          Padding(
+            padding: const EdgeInsets.all(4),
+            child: ElevatedButton(
+              onPressed: import,
+              child: const Text('import'),
+            ),
+          ),
+          FutureBuilder(
+              future: loadMicLib(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Text("Error loading MicLib: ${snapshot.error}");
+                }
+                if (snapshot.data != null) {
+                  return InputDeviceSelector(micLib: snapshot.data!);
+                }
+                if (snapshot.connectionState == ConnectionState.done) {
+                  return const Text("Error loading MicLib");
+                }
+                return const CircularProgressIndicator.adaptive();
+              }),
+          Padding(
+            padding: const EdgeInsets.all(4),
+            child: ElevatedButton(
+              onPressed: start,
+              child: const Text('start'),
+            ),
+          ),
+        ]),
+      ),
+      body: const VtubePlayer(),
+    );
+  }
+
   Future<void> import() async {
-    // final result = await FilePicker.platform
-    //     .pickFiles(type: FileType.image, allowMultiple: true);
-    // if (result != null) {
-    //   debugPrint(result.files.toString());
-    // }
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
 
     if (mounted) {
       await showDialog(
           context: context, builder: (_) => ImportDialog(dirPath: dir.path));
     }
   }
+
+  Future<void> start() async {
+    final dir = await getApplicationSupportDirectory();
+    final results = await Future.wait(
+        fileNames.map((val) => File("${dir.path}/$val").exists()));
+    for (var i = 0; i < results.length; i++) {
+      if (!results[i]) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Missing File ${fileNames[i]}")));
+        }
+      }
+    }
+  }
+
+  Future<MicLib?> loadMicLib() async {
+    micLib = await MicLib.load();
+    return micLib;
+  }
+
+  MicLib? micLib;
+
+  @override
+  void dispose() {
+    super.dispose();
+    micLib?.dispose();
+  }
 }
+
+const fileNames = [
+  "open-eyes-open-mouth",
+  "open-eyes-close-mouth",
+  "close-eyes-open-mouth",
+  "close-eyes-close-mouth",
+];
 
 class ImportDialog extends StatelessWidget {
   final String dirPath;
@@ -101,7 +191,7 @@ class ImportDialog extends StatelessWidget {
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.all(48),
+      insetPadding: const EdgeInsets.all(36),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -116,16 +206,16 @@ class ImportDialog extends StatelessWidget {
               children: [
                 ImportGridTile(
                     title: "Open Eyes Open Mouth",
-                    filePath: "$dirPath/open-eyes-open-mouth"),
+                    filePath: "$dirPath/${fileNames[0]}"),
                 ImportGridTile(
                     title: "Open Eyes Close Mouth",
-                    filePath: "$dirPath/open-eyes-close-mouth"),
+                    filePath: "$dirPath/${fileNames[1]}"),
                 ImportGridTile(
                     title: "Close Eyes Open Mouth",
-                    filePath: "$dirPath/close-eyes-open-mouth"),
+                    filePath: "$dirPath/${fileNames[2]}"),
                 ImportGridTile(
                     title: "Close Eyes Close Mouth",
-                    filePath: "$dirPath/close-eyes-close-mouth"),
+                    filePath: "$dirPath/${fileNames[3]}"),
               ],
             ),
           ),
@@ -220,5 +310,39 @@ class _ImportGridTileState extends State<ImportGridTile> {
   Future<void> clear() async {
     await file.delete();
     setState(() {});
+  }
+}
+
+class InputDeviceSelector extends StatefulWidget {
+  final MicLib micLib;
+  const InputDeviceSelector({super.key, required this.micLib});
+
+  @override
+  State<InputDeviceSelector> createState() => _InputDeviceSelectorState();
+}
+
+class _InputDeviceSelectorState extends State<InputDeviceSelector> {
+  List<DropdownMenuEntry<String>> getEntries() => widget.micLib
+      .getDevices()
+      .map((device) => DropdownMenuEntry(label: device, value: device))
+      .toList();
+
+  late var selectedValue = widget.micLib.getSelectedDevice();
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownMenu(
+      dropdownMenuEntries: getEntries(),
+      initialSelection: selectedValue,
+      onSelected: selectInputDevice,
+    );
+  }
+
+  void selectInputDevice(String? val) {
+    if (val != null) {
+      if (widget.micLib.setInputDevice(val)) {
+        setState(() => selectedValue = val);
+      }
+    }
   }
 }
