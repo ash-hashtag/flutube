@@ -17,9 +17,10 @@ class WaveCustomPaint extends CustomPainter {
     final paint = Paint()..color = Colors.black;
     for (var i = 0; i < xUnits; i++) {
       final xOffset = i * width / xUnits;
-      final yOffset = -values[i] * height;
+      final yOffset = -values[i] * height + height / 2;
 
-      canvas.drawLine(Offset(xOffset, 0), Offset(xOffset, yOffset), paint);
+      canvas.drawLine(
+          Offset(xOffset, height / 2), Offset(xOffset, yOffset), paint);
     }
   }
 
@@ -52,10 +53,15 @@ class _WavesPainterState extends State<WavesPainter>
       final soundValues =
           Provider.of<MicLib>(context, listen: false).readBuffer();
       setState(() {
-        values.addAll(soundValues);
         const size = 500;
-        if (values.length > size) {
-          values = values.sublist(values.length - size, values.length);
+        if (soundValues.length > size) {
+          values = soundValues.sublist(
+              soundValues.length - size, soundValues.length);
+        } else {
+          values.addAll(soundValues);
+          if (values.length > size) {
+            values = values.sublist(values.length - size, values.length);
+          }
         }
       });
     });

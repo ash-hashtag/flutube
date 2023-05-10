@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutube/config_provider.dart';
 import 'package:flutube/vtube_image_handler.dart';
 
 import 'ffi_callback_handler.dart' as ffiCallBackHandler;
 import 'files_provider.dart';
-import 'sound_visualization.dart';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
@@ -19,7 +19,8 @@ void main() async {
   final fileProvider = await FileProvider.load();
   final app = MultiProvider(providers: [
     Provider(create: (context) => micLib),
-    Provider(create: (context) => fileProvider),
+    Provider(create: (context) => ConfigProvider()),
+    ChangeNotifierProvider(create: (context) => fileProvider),
   ], child: const MyApp());
   runApp(app);
 }
@@ -123,7 +124,6 @@ class _VtubePlayerState extends State<VtubePlayer> {
               ElevatedButton(
                   onPressed: stopListening, child: const Text("Stop")),
               Text("{ hoverState: $hoverState, isListening: $isListening }"),
-              const WavesPainter(),
               if (Provider.of<FileProvider>(context, listen: false)
                   .getDefaultImages()
                   .every((el) => el.existsSync()))
@@ -182,6 +182,7 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Colors.green,
         elevation: 0,
         title: Row(children: [
+          const ThresholdHolder(),
           Padding(
             padding: const EdgeInsets.all(4),
             child: ElevatedButton(

@@ -10,7 +10,7 @@ enum ImageState {
   closeEyesCloseMouth;
 }
 
-class FileProvider {
+class FileProvider extends ChangeNotifier {
   final Directory supportDirectory;
 
   late final List<File> _imageFiles;

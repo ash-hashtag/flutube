@@ -2,49 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, Host, Stream, StreamError,
+    Device, Host, InputCallbackInfo, Stream, StreamError,
 };
-
-// fn main() {
-//     let host = cpal::host_from_id(cpal::HostId::Wasapi).unwrap();
-
-//     let device = host.default_input_device().unwrap();
-
-//     let config = device.default_input_config().unwrap();
-
-//     let threshold = std::env::args()
-//         .skip(1)
-//         .next()
-//         .and_then(|x| x.parse::<f32>().ok())
-//         .unwrap_or(0f32);
-
-//     print!(
-//         "Device name: {}, threshold: {}\n",
-//         device.name().unwrap(),
-//         threshold
-//     );
-//     let stream = device
-//         .build_input_stream(
-//             &config.into(),
-//             move |data, _: &_| print_threshold(data, threshold),
-//             |err| eprintln!("error: {err}"),
-//             None,
-//         )
-//         .unwrap();
-
-//     stream.play().unwrap();
-
-//     std::thread::sleep(std::time::Duration::from_secs(std::u64::MAX));
-//     drop(stream);
-// }
-
-// fn print_threshold(slice: &[f32], threshold: f32) {
-//     for i in slice {
-//         if *i > threshold {
-//             print!("{i}\n");
-//         }
-//     }
-// }
 
 pub struct MicLib {
     host: Host,
@@ -98,11 +57,13 @@ impl MicLib {
                 if let Ok(name) = device.name() {
                     if name == device_name {
                         self.selected_input_device = device;
+                        print!("Set Input Device to {}\n", device_name);
                         return Some(());
                     }
                 }
             }
         }
+        print!("Unable to Set Input Device {}\n", device_name);
         None
     }
     pub fn get_sample_format(&self) -> isize {
@@ -129,6 +90,7 @@ impl MicLib {
             let config = self.selected_input_device.default_input_config().ok()?;
             let buffer = self.buffer.clone();
             let stream_error = self.stream_err.clone();
+
             let stream = self
                 .selected_input_device
                 .build_input_stream(
@@ -175,12 +137,10 @@ impl MicLib {
     pub fn get_error(&self) -> isize {
         let mut stream_err = self.stream_err.lock().unwrap();
         if let Some(err) = stream_err.take() {
+            eprint!("[get_error] {err}\n");
             return match err {
                 StreamError::DeviceNotAvailable => 1,
-                StreamError::BackendSpecific { err } => {
-                    eprint!("[get_error] {err}\n");
-                    2
-                }
+                StreamError::BackendSpecific { err: _ } => 2,
             };
         }
 

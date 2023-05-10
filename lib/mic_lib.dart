@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:ffi' as ffi;
@@ -5,13 +6,11 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
-import 'ffi_callback_handler.dart' as ffiCallbackHandler;
 
 const dllPath = "./mic_lib/mic_lib.dll";
 const bufferByteLength = 1024 * 1024 * 4;
 
 class MicLib {
-  final int Function(Pointer<Uint8>, int, Pointer<Uint8>) helloFn;
   final Pointer micLibPointer;
   final void Function(Pointer) freeMicLibFn;
   final int Function(Pointer, Pointer<Uint8>, int) getDevicesFn;
@@ -21,11 +20,10 @@ class MicLib {
   final void Function(Pointer) stopListeningFn;
   final int Function(Pointer) getSampleFormatFn;
   final int Function(Pointer, Pointer<Float>, int) readBufferFn;
-  // final int Function() getErrorFn;
+  final int Function(Pointer) getErrorFn;
 
-  final bufferPtr = malloc.allocate(bufferByteLength);
+  final bufferPtr = malloc.allocate<Uint8>(bufferByteLength);
   MicLib({
-    required this.helloFn,
     required this.micLibPointer,
     required this.freeMicLibFn,
     required this.getDevicesFn,
@@ -35,16 +33,12 @@ class MicLib {
     required this.stopListeningFn,
     required this.getSampleFormatFn,
     required this.readBufferFn,
-    // required this.getErrorFn,
+    required this.getErrorFn,
   });
 
   static Future<MicLib> load() async {
     final file = File(dllPath);
     final dynamicLibrary = DynamicLibrary.open(file.path);
-
-    final helloFn = dynamicLibrary.lookupFunction<
-        Int64 Function(Pointer<Uint8>, Uint64, Pointer<Uint8>),
-        int Function(Pointer<Uint8>, int, Pointer<Uint8>)>("hello");
 
     final instantiateFn =
         dynamicLibrary.lookupFunction<Pointer Function(), Pointer Function()>(
@@ -79,10 +73,10 @@ class MicLib {
         Int64 Function(Pointer, Pointer<Float>, Uint64),
         int Function(Pointer, Pointer<Float>, int)>("read_buffer");
 
-    // final getErrorFn = dynamicLibrary
-    //     .lookupFunction<Int64 Function(), int Function()>("get_error");
+    final getErrorFn = dynamicLibrary.lookupFunction<Int64 Function(Pointer),
+        int Function(Pointer)>("get_error");
+
     return MicLib(
-      helloFn: helloFn,
       micLibPointer: micLibPointer,
       freeMicLibFn: freeMicLibFn,
       getDevicesFn: getDevicesFn,
@@ -92,20 +86,8 @@ class MicLib {
       stopListeningFn: stopListeningFn,
       getSampleFormatFn: getSampleFormatFn,
       readBufferFn: readBufferFn,
-      // getErrorFn: getErrorFn
+      getErrorFn: getErrorFn,
     );
-  }
-
-  String hello(String value) {
-    final ptr = value.toNativeUtf8(allocator: malloc).cast<Uint8>();
-    final optr = malloc.allocate<Uint8>(64);
-    final result = helloFn(ptr, value.length, optr);
-    final s = String.fromCharCodes(optr.asTypedList(result));
-
-    malloc.free(ptr);
-    malloc.free(optr);
-
-    return s;
   }
 
   void dispose() {
@@ -116,8 +98,9 @@ class MicLib {
   List<String> getDevices() {
     late final List<String> devices;
 
-    const len = 1024 * 1024;
-    final optr = malloc.allocate<Uint8>(len);
+    const len = bufferByteLength;
+    // final optr = malloc.allocate<Uint8>(len);
+    final optr = bufferPtr;
 
     final stringLen = getDevicesFn(micLibPointer, optr, len);
     if (stringLen != -1) {
@@ -127,38 +110,45 @@ class MicLib {
       devices = [];
     }
 
-    malloc.free(optr);
+    // malloc.free(optr);
 
     debugPrint("devices: $devices");
     return devices;
   }
 
   String? getSelectedDevice() {
-    const size = 64;
-    final ptr = malloc.allocate<Uint8>(size);
+    const size = bufferByteLength;
+    // final ptr = malloc.allocate<Uint8>(size);
+    final ptr = bufferPtr;
     final result = selectedDeviceFn(micLibPointer, ptr, size);
     if (result < 0) {
       debugPrint("[extern selected_device] returned $result");
-      malloc.free(ptr);
+      // malloc.free(ptr);
       return null;
     }
-    final device = String.fromCharCodes(ptr.asTypedList(result));
-    malloc.free(ptr);
+
+    final device = utf8.decode(ptr.asTypedList(result));
+    // final device = String.fromCharCodes(ptr.asTypedList(result));
+    // malloc.free(ptr);
 
     return device;
   }
 
   bool setInputDevice(String device) {
-    final buffer = Uint8List.fromList(device.codeUnits);
-    final lengthInBytes = buffer.lengthInBytes;
-    final dptr = malloc.allocate<Uint8>(lengthInBytes);
-    final result = selectedDeviceFn(micLibPointer, dptr, lengthInBytes);
+    final buffer = utf8.encode(device);
+    final lengthInBytes = buffer.length;
+    // final dptr = malloc.allocate<Uint8>(lengthInBytes);
+    final dPtr = bufferPtr;
+    dPtr.asTypedList(lengthInBytes).setAll(0, buffer);
+    debugPrint("Trying to set input device to $device");
+    final result = selectedDeviceFn(micLibPointer, dPtr, lengthInBytes);
 
-    malloc.free(dptr);
+    // malloc.free(dptr);
 
     if (result < 0) {
       return false;
     } else {
+      debugPrint("Set Input Device to $device");
       return true;
     }
   }
@@ -182,11 +172,18 @@ class MicLib {
   }
 
   List<double> readBuffer() {
-    const length = 1024 * 4;
-    final bPtr = malloc.allocate<Float>(length * sizeOf<Float>());
+    final error = getErrorFn(micLibPointer);
+    if (error != -1) {
+      stopListening();
+      return [];
+    }
+    // const length = 1024 * 4;
+    final length = bufferByteLength ~/ sizeOf<Float>();
+    // final bPtr = malloc.allocate<Float>(length * sizeOf<Float>());
+    final bPtr = bufferPtr.cast<Float>();
     final readLength = readBufferFn(micLibPointer, bPtr, length);
     final list = List<double>.from(bPtr.asTypedList(readLength));
-    malloc.free(bPtr);
+    // malloc.free(bPtr);
     return list;
   }
 }
