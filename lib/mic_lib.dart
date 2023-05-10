@@ -5,8 +5,10 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
+import 'ffi_callback_handler.dart' as ffiCallbackHandler;
 
 const dllPath = "./mic_lib/mic_lib.dll";
+const bufferByteLength = 1024 * 1024 * 4;
 
 class MicLib {
   final int Function(Pointer<Uint8>, int, Pointer<Uint8>) helloFn;
@@ -15,12 +17,13 @@ class MicLib {
   final int Function(Pointer, Pointer<Uint8>, int) getDevicesFn;
   final int Function(Pointer, Pointer<Uint8>, int) setDeviceFn;
   final int Function(Pointer, Pointer<Uint8>, int) selectedDeviceFn;
-  final int Function(
-      Pointer,
-      Pointer<NativeFunction<Void Function(Pointer<Float>, Uint64)>>,
-      Pointer<NativeFunction<Void Function()>>) startListeningFn;
+  final int Function(Pointer) startListeningFn;
   final void Function(Pointer) stopListeningFn;
+  final int Function(Pointer) getSampleFormatFn;
+  final int Function(Pointer, Pointer<Float>, int) readBufferFn;
+  // final int Function() getErrorFn;
 
+  final bufferPtr = malloc.allocate(bufferByteLength);
   MicLib({
     required this.helloFn,
     required this.micLibPointer,
@@ -30,63 +33,67 @@ class MicLib {
     required this.selectedDeviceFn,
     required this.startListeningFn,
     required this.stopListeningFn,
+    required this.getSampleFormatFn,
+    required this.readBufferFn,
+    // required this.getErrorFn,
   });
 
-  static Future<MicLib?> load() async {
-    if (await File(dllPath).exists()) {
-      final file = File(dllPath);
-      final dynamicLibrary = DynamicLibrary.open(file.path);
+  static Future<MicLib> load() async {
+    final file = File(dllPath);
+    final dynamicLibrary = DynamicLibrary.open(file.path);
 
-      final helloFn = dynamicLibrary.lookupFunction<
-          Int64 Function(Pointer<Uint8>, Uint64, Pointer<Uint8>),
-          int Function(Pointer<Uint8>, int, Pointer<Uint8>)>("hello");
+    final helloFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer<Uint8>, Uint64, Pointer<Uint8>),
+        int Function(Pointer<Uint8>, int, Pointer<Uint8>)>("hello");
 
-      final instantiateFn =
-          dynamicLibrary.lookupFunction<Pointer Function(), Pointer Function()>(
-              "instantiate_mic_lib");
+    final instantiateFn =
+        dynamicLibrary.lookupFunction<Pointer Function(), Pointer Function()>(
+            "instantiate_mic_lib");
 
-      final micLibPointer = instantiateFn();
+    final micLibPointer = instantiateFn();
 
-      final freeMicLibFn = dynamicLibrary.lookupFunction<Void Function(Pointer),
-          void Function(Pointer)>("free_mic_lib");
+    final freeMicLibFn = dynamicLibrary.lookupFunction<Void Function(Pointer),
+        void Function(Pointer)>("free_mic_lib");
 
-      final getDevicesFn = dynamicLibrary.lookupFunction<
-          Int64 Function(Pointer, Pointer<Uint8>, Uint64),
-          int Function(Pointer, Pointer<Uint8>, int)>("get_devices");
+    final getDevicesFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer, Pointer<Uint8>, Uint64),
+        int Function(Pointer, Pointer<Uint8>, int)>("get_devices");
 
-      final setDeviceFn = dynamicLibrary.lookupFunction<
-          Int64 Function(Pointer, Pointer<Uint8>, Uint64),
-          int Function(Pointer, Pointer<Uint8>, int)>("set_device");
+    final setDeviceFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer, Pointer<Uint8>, Uint64),
+        int Function(Pointer, Pointer<Uint8>, int)>("set_device");
 
-      final selectedDeviceFn = dynamicLibrary.lookupFunction<
-          Int64 Function(Pointer, Pointer<Uint8>, Uint64),
-          int Function(Pointer, Pointer<Uint8>, int)>("selected_device");
+    final selectedDeviceFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer, Pointer<Uint8>, Uint64),
+        int Function(Pointer, Pointer<Uint8>, int)>("selected_device");
 
-      final startListeningFn = dynamicLibrary.lookupFunction<
-          Int64 Function(
-              Pointer,
-              Pointer<NativeFunction<Void Function(Pointer<Float>, Uint64)>>,
-              Pointer<NativeFunction<Void Function()>>),
-          int Function(
-              Pointer,
-              Pointer<NativeFunction<Void Function(Pointer<Float>, Uint64)>>,
-              Pointer<NativeFunction<Void Function()>>)>("start_listening");
-      final stopListeningFn = dynamicLibrary.lookupFunction<
-          Void Function(Pointer), void Function(Pointer)>("stop_listening");
+    final startListeningFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer), int Function(Pointer)>("start_listening");
+    final stopListeningFn = dynamicLibrary.lookupFunction<
+        Void Function(Pointer), void Function(Pointer)>("stop_listening");
 
-      return MicLib(
-        helloFn: helloFn,
-        micLibPointer: micLibPointer,
-        freeMicLibFn: freeMicLibFn,
-        getDevicesFn: getDevicesFn,
-        setDeviceFn: setDeviceFn,
-        selectedDeviceFn: selectedDeviceFn,
-        startListeningFn: startListeningFn,
-        stopListeningFn: stopListeningFn,
-      );
-    }
+    final getSampleFormatFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer), int Function(Pointer)>("get_sample_format");
 
-    return null;
+    final readBufferFn = dynamicLibrary.lookupFunction<
+        Int64 Function(Pointer, Pointer<Float>, Uint64),
+        int Function(Pointer, Pointer<Float>, int)>("read_buffer");
+
+    // final getErrorFn = dynamicLibrary
+    //     .lookupFunction<Int64 Function(), int Function()>("get_error");
+    return MicLib(
+      helloFn: helloFn,
+      micLibPointer: micLibPointer,
+      freeMicLibFn: freeMicLibFn,
+      getDevicesFn: getDevicesFn,
+      setDeviceFn: setDeviceFn,
+      selectedDeviceFn: selectedDeviceFn,
+      startListeningFn: startListeningFn,
+      stopListeningFn: stopListeningFn,
+      getSampleFormatFn: getSampleFormatFn,
+      readBufferFn: readBufferFn,
+      // getErrorFn: getErrorFn
+    );
   }
 
   String hello(String value) {
@@ -103,6 +110,7 @@ class MicLib {
 
   void dispose() {
     freeMicLibFn(micLibPointer);
+    malloc.free(bufferPtr);
   }
 
   List<String> getDevices() {
@@ -121,6 +129,7 @@ class MicLib {
 
     malloc.free(optr);
 
+    debugPrint("devices: $devices");
     return devices;
   }
 
@@ -154,14 +163,30 @@ class MicLib {
     }
   }
 
-  void startListening(void Function(Pointer<Float>, int) onData) {
-    final fPtr =
-        Pointer.fromFunction<Void Function(Pointer<Float>, Uint64)>(onData);
+  bool startListening() {
+    final result = startListeningFn(micLibPointer);
+    if (result < 0) {
+      debugPrint("Error Start Listening $result");
+      return false;
+    } else {
+      return true;
+    }
+  }
 
-    final ePtr = Pointer.fromFunction<Void Function()>(onError);
+  void stopListening() {
+    stopListeningFn(micLibPointer);
+  }
 
-    startListeningFn(micLibPointer, fPtr, ePtr);
+  int getFormat() {
+    return getSampleFormatFn(micLibPointer);
+  }
+
+  List<double> readBuffer() {
+    const length = 1024 * 4;
+    final bPtr = malloc.allocate<Float>(length * sizeOf<Float>());
+    final readLength = readBufferFn(micLibPointer, bPtr, length);
+    final list = List<double>.from(bPtr.asTypedList(readLength));
+    malloc.free(bPtr);
+    return list;
   }
 }
-
-void onError() => debugPrint("Error during stream");

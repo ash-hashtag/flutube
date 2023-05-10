@@ -1,26 +1,35 @@
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutube/vtube_image_handler.dart';
+
+import 'ffi_callback_handler.dart' as ffiCallBackHandler;
+import 'files_provider.dart';
+import 'sound_visualization.dart';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutube/mic_lib.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  final micLib = await MicLib.load();
+  final fileProvider = await FileProvider.load();
+  final app = MultiProvider(providers: [
+    Provider(create: (context) => micLib),
+    Provider(create: (context) => fileProvider),
+  ], child: const MyApp());
+  runApp(app);
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Flutube',
       home: MyHomePage(),
     );
   }
@@ -35,9 +44,58 @@ class MyHomePage extends StatefulWidget {
 
 enum HoverState { inside, outside }
 
+class VtupePlayerBase extends StatefulWidget {
+  const VtupePlayerBase({super.key});
+
+  @override
+  State<VtupePlayerBase> createState() => _VtupePlayerBaseState();
+}
+
+class _VtupePlayerBaseState extends State<VtupePlayerBase>
+    with SingleTickerProviderStateMixin {
+  var text = "";
+  late final AnimationController _animationController;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController =
+        AnimationController(vsync: this, duration: const Duration(days: 365));
+    final tween = Tween(begin: 0.0, end: 1.0);
+    final animation = _animationController.drive(tween);
+    animation.addListener(listener);
+    _animationController.forward();
+  }
+
+  void listener() {
+    final list = Provider.of<MicLib>(context, listen: false).readBuffer();
+    if (list.isNotEmpty) {
+      setState(() {
+        final maxValue = list.reduce((a, b) => a > b ? a : b);
+        final minValue = list.reduce((a, b) => a < b ? a : b);
+        final length = list.length;
+
+        setState(
+            () => text = "{ min: $minValue, max: $maxValue, length: $length }");
+        debugPrint(text);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+    _animationController.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(text);
+  }
+}
+
 class VtubePlayer extends StatefulWidget {
-  final MicLib micLib;
-  const VtubePlayer({super.key, required this.micLib});
+  const VtubePlayer({super.key});
 
   @override
   State<VtubePlayer> createState() => _VtubePlayerState();
@@ -45,6 +103,7 @@ class VtubePlayer extends StatefulWidget {
 
 class _VtubePlayerState extends State<VtubePlayer> {
   var hoverState = HoverState.outside;
+
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
@@ -56,7 +115,23 @@ class _VtubePlayerState extends State<VtubePlayer> {
           color: Colors.blue,
           width: double.infinity,
           height: double.infinity,
-          child: Text(hoverState.toString()),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ElevatedButton(
+                  onPressed: startListening, child: const Text("Start")),
+              ElevatedButton(
+                  onPressed: stopListening, child: const Text("Stop")),
+              Text("{ hoverState: $hoverState, isListening: $isListening }"),
+              const WavesPainter(),
+              if (Provider.of<FileProvider>(context, listen: false)
+                  .getDefaultImages()
+                  .every((el) => el.existsSync()))
+                const Expanded(child: VtubeImageHandler())
+              else
+                const Text("Not All Images are imported"),
+            ],
+          ),
         ),
       ),
     );
@@ -70,28 +145,31 @@ class _VtubePlayerState extends State<VtubePlayer> {
     setState(() => hoverState = HoverState.outside);
   }
 
-  Future<void> start() async {
-    final dir = await getApplicationSupportDirectory();
+  var isListening = false;
+
+  Future<void> startListening() async {
+    final fileProvider = Provider.of<FileProvider>(context, listen: false);
     final results = await Future.wait(
-        fileNames.map((val) => File("${dir.path}/$val").exists()));
+        fileProvider.getDefaultImages().map((val) => val.exists()));
     for (var i = 0; i < results.length; i++) {
       if (!results[i]) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Missing File ${fileNames[i]}")));
+              SnackBar(content: Text("Missing File ${ImageState.values[i]}")));
+          return;
         }
       }
     }
-
-    widget.micLib.startListening(onData);
+    if (mounted) {
+      final result =
+          Provider.of<MicLib>(context, listen: false).startListening();
+      if (result) setState(() => isListening = true);
+    }
   }
 
-  var text = "";
-  void onData(Pointer<Float> ptr, int size) {
-    final list = ptr.asTypedList(size);
-    setState(() {
-      text = list.toString();
-    });
+  void stopListening() {
+    Provider.of<MicLib>(context, listen: false).stopListening();
+    setState(() => isListening = false);
   }
 }
 
@@ -111,27 +189,7 @@ class _MyHomePageState extends State<MyHomePage> {
               child: const Text('import'),
             ),
           ),
-          FutureBuilder(
-              future: loadMicLib(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return Text("Error loading MicLib: ${snapshot.error}");
-                }
-                if (snapshot.data != null) {
-                  return InputDeviceSelector(micLib: snapshot.data!);
-                }
-                if (snapshot.connectionState == ConnectionState.done) {
-                  return const Text("Error loading MicLib");
-                }
-                return const CircularProgressIndicator.adaptive();
-              }),
-          Padding(
-            padding: const EdgeInsets.all(4),
-            child: ElevatedButton(
-              onPressed: start,
-              child: const Text('start'),
-            ),
-          ),
+          const InputDeviceSelector(),
         ]),
       ),
       body: const VtubePlayer(),
@@ -139,85 +197,35 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> import() async {
-    final dir = await getApplicationSupportDirectory();
-
-    if (mounted) {
-      await showDialog(
-          context: context, builder: (_) => ImportDialog(dirPath: dir.path));
-    }
-  }
-
-  Future<void> start() async {
-    final dir = await getApplicationSupportDirectory();
-    final results = await Future.wait(
-        fileNames.map((val) => File("${dir.path}/$val").exists()));
-    for (var i = 0; i < results.length; i++) {
-      if (!results[i]) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Missing File ${fileNames[i]}")));
-        }
-      }
-    }
-  }
-
-  Future<MicLib?> loadMicLib() async {
-    micLib = await MicLib.load();
-    return micLib;
-  }
-
-  MicLib? micLib;
-
-  @override
-  void dispose() {
-    super.dispose();
-    micLib?.dispose();
+    await showDialog(context: context, builder: (_) => const ImportDialog());
   }
 }
 
-const fileNames = [
-  "open-eyes-open-mouth",
-  "open-eyes-close-mouth",
-  "close-eyes-open-mouth",
-  "close-eyes-close-mouth",
-];
-
 class ImportDialog extends StatelessWidget {
-  final String dirPath;
-  const ImportDialog({super.key, required this.dirPath});
+  const ImportDialog({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final fileProvider = Provider.of<FileProvider>(context, listen: false);
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.all(36),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
             padding: const EdgeInsets.all(8),
             child: GridView.count(
-              childAspectRatio: 2,
-              shrinkWrap: true,
-              crossAxisCount: 2,
-              crossAxisSpacing: 4,
-              mainAxisSpacing: 16,
-              children: [
-                ImportGridTile(
-                    title: "Open Eyes Open Mouth",
-                    filePath: "$dirPath/${fileNames[0]}"),
-                ImportGridTile(
-                    title: "Open Eyes Close Mouth",
-                    filePath: "$dirPath/${fileNames[1]}"),
-                ImportGridTile(
-                    title: "Close Eyes Open Mouth",
-                    filePath: "$dirPath/${fileNames[2]}"),
-                ImportGridTile(
-                    title: "Close Eyes Close Mouth",
-                    filePath: "$dirPath/${fileNames[3]}"),
-              ],
-            ),
+                childAspectRatio: 2,
+                shrinkWrap: true,
+                crossAxisCount: 2,
+                crossAxisSpacing: 4,
+                mainAxisSpacing: 4,
+                children: fileProvider
+                    .getDefaultImages()
+                    .map((file) => ImportGridTile(
+                        title: file.path.split('/').last, filePath: file.path))
+                    .toList()),
           ),
           Center(
             child: ElevatedButton(
@@ -314,20 +322,23 @@ class _ImportGridTileState extends State<ImportGridTile> {
 }
 
 class InputDeviceSelector extends StatefulWidget {
-  final MicLib micLib;
-  const InputDeviceSelector({super.key, required this.micLib});
+  const InputDeviceSelector({
+    super.key,
+  });
 
   @override
   State<InputDeviceSelector> createState() => _InputDeviceSelectorState();
 }
 
 class _InputDeviceSelectorState extends State<InputDeviceSelector> {
-  List<DropdownMenuEntry<String>> getEntries() => widget.micLib
-      .getDevices()
-      .map((device) => DropdownMenuEntry(label: device, value: device))
-      .toList();
+  List<DropdownMenuEntry<String>> getEntries() =>
+      Provider.of<MicLib>(context, listen: false)
+          .getDevices()
+          .map((device) => DropdownMenuEntry(label: device, value: device))
+          .toList();
 
-  late var selectedValue = widget.micLib.getSelectedDevice();
+  late var selectedValue =
+      Provider.of<MicLib>(context, listen: false).getSelectedDevice();
 
   @override
   Widget build(BuildContext context) {
@@ -340,7 +351,7 @@ class _InputDeviceSelectorState extends State<InputDeviceSelector> {
 
   void selectInputDevice(String? val) {
     if (val != null) {
-      if (widget.micLib.setInputDevice(val)) {
+      if (Provider.of<MicLib>(context, listen: false).setInputDevice(val)) {
         setState(() => selectedValue = val);
       }
     }

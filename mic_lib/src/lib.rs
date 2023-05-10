@@ -1,6 +1,8 @@
+use std::sync::{Arc, Mutex};
+
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, Host, Stream,
+    Device, Host, Stream, StreamError,
 };
 
 // fn main() {
@@ -48,6 +50,8 @@ pub struct MicLib {
     host: Host,
     selected_input_device: Device,
     stream: Option<Stream>,
+    buffer: Arc<Mutex<Vec<f32>>>,
+    stream_err: Arc<Mutex<Option<StreamError>>>,
 }
 
 impl MicLib {
@@ -55,10 +59,14 @@ impl MicLib {
         let host = cpal::default_host();
         let selected_input_device = host.default_input_device()?;
         let stream = None;
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::with_capacity(1024 * 4)));
+        let stream_err = Arc::new(Mutex::new(None));
         Some(Self {
             host,
             selected_input_device,
             stream,
+            buffer,
+            stream_err,
         })
     }
 
@@ -116,28 +124,26 @@ impl MicLib {
             return -1;
         }
     }
-    pub fn start_listening(
-        &mut self,
-        f: extern "C" fn(*const f32, usize),
-        err_fn: extern "C" fn(),
-    ) -> Option<()> {
+    pub fn start_listening(&mut self) -> Option<()> {
         if self.stream.is_none() {
             let config = self.selected_input_device.default_input_config().ok()?;
+            let buffer = self.buffer.clone();
+            let stream_error = self.stream_err.clone();
             let stream = self
                 .selected_input_device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[f32], _| {
-                        let ptr = data.as_ptr();
-                        f(ptr, data.len());
+                        buffer.lock().unwrap().extend_from_slice(data);
                     },
                     move |err| {
                         eprintln!("error on stream: {err}");
-                        err_fn();
+                        *stream_error.lock().unwrap() = Some(err);
                     },
                     None,
                 )
                 .ok()?;
+            stream.play().ok()?;
             self.stream = Some(stream);
         }
         Some(())
@@ -146,6 +152,39 @@ impl MicLib {
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }
+    }
+
+    pub fn read_buffer(&mut self, output_buffer: &mut [f32]) -> isize {
+        if let Ok(mut buffer) = self.buffer.lock() {
+            let buffer_len = buffer.len();
+            let min_len = output_buffer.len().min(buffer_len);
+            output_buffer[0..min_len].copy_from_slice(&buffer[0..min_len]);
+
+            if min_len == buffer_len {
+                buffer.clear();
+            } else {
+                buffer.copy_within(min_len.., 0);
+                buffer.truncate(buffer_len - min_len);
+            }
+            min_len as isize
+        } else {
+            -1
+        }
+    }
+
+    pub fn get_error(&self) -> isize {
+        let mut stream_err = self.stream_err.lock().unwrap();
+        if let Some(err) = stream_err.take() {
+            return match err {
+                StreamError::DeviceNotAvailable => 1,
+                StreamError::BackendSpecific { err } => {
+                    eprint!("[get_error] {err}\n");
+                    2
+                }
+            };
+        }
+
+        -1
     }
 }
 
@@ -215,12 +254,8 @@ pub unsafe extern "C" fn selected_device(ptr: *const MicLib, optr: *mut u8, len:
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn start_listening(
-    ptr: *mut MicLib,
-    f: extern "C" fn(*const f32, usize),
-    err_fn: extern "C" fn(),
-) -> isize {
-    if (*ptr).start_listening(f, err_fn).is_some() {
+pub unsafe extern "C" fn start_listening(ptr: *mut MicLib) -> isize {
+    if (*ptr).start_listening().is_some() {
         0
     } else {
         -1
@@ -230,4 +265,58 @@ pub unsafe extern "C" fn start_listening(
 #[no_mangle]
 pub unsafe extern "C" fn stop_listening(ptr: *mut MicLib) {
     (*ptr).stop_listening();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn read_buffer(ptr: *mut MicLib, dptr: *mut f32, size: usize) -> isize {
+    let slice = std::slice::from_raw_parts_mut(dptr, size);
+    (*ptr).read_buffer(slice)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_error(ptr: *mut MicLib) -> isize {
+    (*ptr).get_error()
+}
+
+#[cfg(test)]
+mod test {
+    use cpal::traits::DeviceTrait;
+
+    use crate::MicLib;
+
+    #[test]
+    fn test_mic_lib() {
+        let mut mic_lib = MicLib::new().unwrap();
+        print!("device: {}", mic_lib.selected_input_device.name().unwrap());
+        mic_lib.start_listening().unwrap();
+        let mut buffer = vec![0f32; 4 * 1024];
+        let mut j = 0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            let size = mic_lib.read_buffer(&mut buffer);
+            if size > 0 {
+                let result = &buffer[0..size as usize];
+                let len = result.len();
+                let mut min = result[0];
+                let mut max = result[0];
+                for i in result {
+                    if *i < min {
+                        min = *i;
+                    } else if *i > max {
+                        max = *i;
+                    }
+                }
+                print!("[ min: {min}, max: {max}, len: {len} ]\n");
+            }
+
+            j += 1;
+            if j > 100 {
+                break;
+            }
+        }
+
+        mic_lib.stop_listening();
+
+        assert!(false);
+    }
 }
