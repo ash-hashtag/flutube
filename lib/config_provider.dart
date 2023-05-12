@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/src/widgets/framework.dart';
-import 'package:flutter/src/widgets/placeholder.dart';
 import 'package:provider/provider.dart';
 
 class ConfigProvider {
-  var _threshold = 0.05;
+  var threshold = 0.05;
+  var switchDurationInMs = 300;
 
-  double get threshold => _threshold;
-  set threshold(double val) => _threshold = threshold;
+  ConfigProvider() {
+    debugPrint("New Config");
+  }
+
+  @override
+  String toString() =>
+      " { ConfigProvider: { threshold: $threshold, switchDuration: $switchDurationInMs } } ";
 }
 
 class ThresholdHolder extends StatefulWidget {
@@ -18,25 +22,58 @@ class ThresholdHolder extends StatefulWidget {
 }
 
 class _ThresholdHolderState extends State<ThresholdHolder> {
-  final _controller = TextEditingController(text: '0.05');
+  late final config = Provider.of<ConfigProvider>(context, listen: false);
+  late final _thresholdController =
+      TextEditingController(text: config.threshold.toString());
+  late final _switchDurationController =
+      TextEditingController(text: config.switchDurationInMs.toString());
 
   @override
   void dispose() {
     super.dispose();
-    _controller.dispose();
+    _thresholdController.dispose();
+    _switchDurationController.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 50,
-      child: TextField(
-        controller: _controller,
-        keyboardType:
-            const TextInputType.numberWithOptions(decimal: true, signed: true),
-        onChanged: (val) => Provider.of<ConfigProvider>(context, listen: false)
-            .threshold = double.parse(val),
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 50,
+          child: TextField(
+            controller: _thresholdController,
+            keyboardType: const TextInputType.numberWithOptions(
+                decimal: true, signed: true),
+            onChanged: onThresholdChanged,
+          ),
+        ),
+        SizedBox(
+          width: 50,
+          child: TextField(
+            controller: _switchDurationController,
+            keyboardType: TextInputType.number,
+            onChanged: onSwitchDurationChanged,
+          ),
+        ),
+      ],
     );
+  }
+
+  void onThresholdChanged(String value) {
+    final val = double.tryParse(value);
+    if (val != null) {
+      config.threshold = val;
+      debugPrint("updated config: $config");
+    }
+  }
+
+  void onSwitchDurationChanged(String value) {
+    final val = int.tryParse(value);
+    if (val != null) {
+      config.switchDurationInMs = val;
+      debugPrint("updated config: $config");
+    }
   }
 }

@@ -4,23 +4,21 @@ import 'dart:typed_data';
 import 'package:flutube/config_provider.dart';
 import 'package:flutube/vtube_image_handler.dart';
 
-import 'ffi_callback_handler.dart' as ffiCallBackHandler;
 import 'files_provider.dart';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutube/mic_lib.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
   final micLib = await MicLib.load();
   final fileProvider = await FileProvider.load();
   final app = MultiProvider(providers: [
-    Provider(create: (context) => micLib),
-    Provider(create: (context) => ConfigProvider()),
-    ChangeNotifierProvider(create: (context) => fileProvider),
+    Provider.value(value: micLib),
+    Provider.value(value: ConfigProvider()),
+    ChangeNotifierProvider.value(value: fileProvider),
   ], child: const MyApp());
   runApp(app);
 }

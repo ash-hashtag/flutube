@@ -20,7 +20,6 @@ class _VtubeImageHandlerState extends State<VtubeImageHandler>
   late final images = Provider.of<FileProvider>(context, listen: false)
       .getDefaultImages()
       .toList();
-  var values = List.filled(500, 0.0, growable: true);
 
   var state = ImageState.openEyesCloseMouth;
 
@@ -40,53 +39,73 @@ class _VtubeImageHandlerState extends State<VtubeImageHandler>
     _animationController.dispose();
   }
 
+  late final config = Provider.of<ConfigProvider>(context, listen: false);
+  late final micLib = Provider.of<MicLib>(context, listen: false);
+
+  var eyesOpen = true;
+  var mouthOpen = false;
+
+  ImageState getState() {
+    if (eyesOpen) {
+      if (mouthOpen) {
+        return ImageState.openEyesOpenMouth;
+      } else {
+        return ImageState.openEyesCloseMouth;
+      }
+    } else {
+      if (mouthOpen) {
+        return ImageState.closeEyesOpenMouth;
+      } else {
+        return ImageState.closeEyesCloseMouth;
+      }
+    }
+  }
+
+  void updateState() {
+    final newState = getState();
+    if (state != newState) {
+      setState(() => state = newState);
+      lastActionTimeStamp = DateTime.now();
+    }
+  }
+
+  var lastActionTimeStamp = DateTime.now();
+
+  void closeMouth() {
+    if (DateTime.now().difference(lastActionTimeStamp).inMilliseconds >
+        config.switchDurationInMs) {
+      mouthOpen = false;
+      updateState();
+    }
+  }
+
+  void openMouth() {
+    mouthOpen = true;
+    updateState();
+  }
+
   void listener() {
-    final soundValues =
-        Provider.of<MicLib>(context, listen: false).readBuffer();
+    final soundValues = micLib.readBuffer();
     if (soundValues.isEmpty) {
-      setState(() => state = ImageState.openEyesCloseMouth);
+      closeMouth();
       return;
     }
-    values.addAll(soundValues);
-    values = values.sublist(values.length - 500, values.length);
-
     var metThreshold = false;
-    final threshold =
-        Provider.of<ConfigProvider>(context, listen: false).threshold;
+    final threshold = config.threshold;
     for (final val in soundValues) {
       if (val.abs() > threshold) {
-        debugPrint("$val met threshold: $threshold");
-        setState(() => state = ImageState.openEyesOpenMouth);
+        openMouth();
         metThreshold = true;
         break;
       }
     }
     if (!metThreshold) {
-      setState(() => state = ImageState.openEyesCloseMouth);
+      closeMouth();
     }
   }
 
-  var allTimeMax = 0.0;
-  var allTimeMin = 0.0;
   String getInfo() {
-    var max = 0.0, min = 0.0;
-    for (final val in values) {
-      if (val < min) {
-        min = val;
-      } else if (val > max) {
-        max = val;
-      }
-    }
-
-    if (min < allTimeMin) {
-      allTimeMax = min;
-    }
-
-    if (max > allTimeMax) {
-      allTimeMax = min;
-    }
-
-    return "{ allTimeMax: $allTimeMax, allTimeMin: $allTimeMin, min: $min, max: $max }";
+    return config.toString();
   }
 
   @override
@@ -98,12 +117,6 @@ class _VtubeImageHandlerState extends State<VtubeImageHandler>
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(getInfo()),
-            Container(
-                color: Colors.yellow,
-                height: 100,
-                width: 500,
-                child: CustomPaint(
-                    painter: WaveCustomPaint(values), child: Container())),
             Row(
               children: ImageState.values
                   .map((imageState) => ElevatedButton(

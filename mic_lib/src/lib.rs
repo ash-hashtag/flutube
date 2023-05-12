@@ -120,14 +120,8 @@ impl MicLib {
         if let Ok(mut buffer) = self.buffer.lock() {
             let buffer_len = buffer.len();
             let min_len = output_buffer.len().min(buffer_len);
-            output_buffer[0..min_len].copy_from_slice(&buffer[0..min_len]);
-
-            if min_len == buffer_len {
-                buffer.clear();
-            } else {
-                buffer.copy_within(min_len.., 0);
-                buffer.truncate(buffer_len - min_len);
-            }
+            output_buffer[0..min_len].copy_from_slice(&buffer[buffer_len - min_len..]);
+            buffer.clear();
             min_len as isize
         } else {
             -1
